@@ -82,6 +82,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.async_pipelines = i != 0;
     } else if (key == "msaa") {
         v.msaa = i != 0;
+    } else if (key == "graphics_tab") {
+        v.graphics_tab = i != 0;
     } else if (key == "fullscreen") {
         v.fullscreen = i != 0;
     } else if (key == "borderless") {
@@ -126,6 +128,14 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         }
     } else if (key == "ultrawide") {
         v.ultrawide = i != 0 ? 1 : 0;
+    } else if (key == "widescreen_layout") {
+        v.widescreen = value == "21x9" ? 1 : value == "32x9" ? 2 : 0;
+    } else if (key == "widescreen_output") {
+        int w = 0, h = 0;
+        if (std::sscanf(value.c_str(), "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+            v.widescreen_w = w;
+            v.widescreen_h = h;
+        }
     } else if (key == "ultrawide_ask") {
         v.ultrawide_ask = i != 0;
     } else if (key == "ultrawide_size") {
@@ -275,6 +285,7 @@ void Load() {
     v.startup_ultrawide = v.ultrawide == 1 && v.ultrawide_w > 0;
     v.startup_ultrawide_w = v.ultrawide_w;
     v.startup_ultrawide_h = v.ultrawide_h;
+    v.startup_widescreen = v.widescreen;
     v.startup_temporal = v.temporal;
     v.startup_dlss_quality = v.dlss_quality;
     v.startup_dlss_output = v.dlss_output;
@@ -392,6 +403,7 @@ void Save() {
     put("fps_limit", std::to_string(v.fps_limit.load()));
     put("async_pipelines", flag(v.async_pipelines));
     put("msaa", flag(v.msaa));
+    put("graphics_tab", flag(v.graphics_tab));
     put("fullscreen", flag(v.fullscreen));
     put("borderless", flag(v.borderless));
     put("volume", std::to_string(v.volume.load()));
@@ -408,6 +420,14 @@ void Save() {
     if (v.render_res >= 0) put("render_res", std::to_string(RenderResHeights[v.render_res]));
     if (v.ultrawide >= 0) put("ultrawide", flag(v.ultrawide == 1));
     put("ultrawide_ask", flag(v.ultrawide_ask));
+    {
+        static const char* layouts[] = {"off", "21x9", "32x9"};
+        put("widescreen_layout", layouts[std::clamp(v.widescreen.load(), 0, 2)]);
+        if (v.widescreen_w > 0) {
+            put("widescreen_output", std::to_string(v.widescreen_w.load()) + "x" +
+                                         std::to_string(v.widescreen_h.load()));
+        }
+    }
     if (v.ultrawide_w > 0) {
         put("ultrawide_size", std::to_string(v.ultrawide_w.load()) + "x" + std::to_string(v.ultrawide_h.load()));
     }
