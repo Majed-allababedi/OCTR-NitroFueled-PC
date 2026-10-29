@@ -112,6 +112,12 @@ jobs:
             mingw-w64-clang-x86_64-spirv-tools
             mingw-w64-clang-x86_64-spirv-headers
             mingw-w64-clang-x86_64-spirv-cross
+      - name: Fetch pinned DXC packaging dependency
+        shell: pwsh
+        run: |
+          Invoke-WebRequest 'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip' -OutFile dxc.zip
+          if ((Get-FileHash dxc.zip -Algorithm SHA256).Hash -ne 'ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1') { throw 'DXC checksum mismatch' }
+          Expand-Archive dxc.zip -DestinationPath .ci-dxc
       - name: Build and package Windows ZIP
         env:
           MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
@@ -119,7 +125,7 @@ jobs:
           set -euo pipefail
           version=$(git describe --tags --match 'v*' --always)
           bash build.sh
-          python3 packaging/windows/make_portable.py --version "$version"
+          python3 packaging/windows/make_portable.py --version "$version" --dxc-dir .ci-dxc
           asset="CTR-NitroFueled-PC-portable-${version}-windows.zip"
           mv dist/CTR-NitroFueled-PC-portable-windows.zip "dist/$asset"
           mv dist/CTR-NitroFueled-PC-portable-windows.zip.sha256 "dist/$asset.sha256"
