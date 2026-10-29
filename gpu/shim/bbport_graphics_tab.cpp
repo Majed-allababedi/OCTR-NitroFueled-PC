@@ -20,7 +20,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
-#include <memory>
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -103,16 +102,19 @@ bool SafeRead(const void* address, void* out, std::size_t size) {
 #endif
 }
 
-// Hold the getter reference until the original callback has returned.
-using HeldObject = std::unique_ptr<void, ReleaseFn>;
-HeldObject Input(void* context, void* args) {
+/// The node's object input (its first pin), with the getter's reference dropped again.
+void* Input(void* context, void* args) {
     void* object = nullptr;
     void** pins = nullptr;
     void* pin = nullptr;
     if (args && SafeRead(static_cast<u8*>(args) + 0x10, &pins, sizeof(pins)) && pins &&
-        SafeRead(pins, &pin, sizeof(pin)) && pin)
+        SafeRead(pins, &pin, sizeof(pin)) && pin) {
         reinterpret_cast<GetterFn>(image + PinGetter)(context, pin, &object);
-    return HeldObject(object, reinterpret_cast<ReleaseFn>(image + (Release - code_shift)));
+        if (object) {
+            reinterpret_cast<ReleaseFn>(image + (Release - code_shift))(object);
+        }
+    }
+    return object;
 }
 
 /// An identifier-like string at `address` (at least 4 characters: letters, digits, '_').
@@ -295,6 +297,15 @@ void SetText(u64 placeable, const char* text) {
 /// The tab's label: its navigation item (CGuiBehaviorNavigationItem: _itemText +0xe8,
 /// _textPlaceable +0xf0, from the game's field tables) gets "Graphics" (the text table has none
 /// for it in this region, so the button keeps its template's "Crash Cove").
+const char* TabLabel(int id) {
+    return (id == 3 || id == 20 || id == 7 || id == 17) ? "Gráficos"
+         : (id == 2 || id == 22)                       ? "Graphismes"
+         : id == 4                                    ? "Grafik"
+         : id == 5                                    ? "Grafica"
+         : id == 21                                   ? "ﺍﻟﺮﺳﻮﻡ"
+                                                       : "Graphics";
+}
+
 void Relabel(void* tab) {
     const u64 item = NavItem(reinterpret_cast<u64>(tab));
     if (!item) {
@@ -305,11 +316,7 @@ void Relabel(void* tab) {
     // writes it in the available USA/EU text tables.
     const char* language = std::getenv("BB_LANGUAGE");
     const int id = language ? std::atoi(language) : 1;
-    const char* label = (id == 3 || id == 20 || id == 7 || id == 17) ? "Gráficos"
-                        : (id == 2 || id == 22)                       ? "Graphismes"
-                        : id == 4                                    ? "Grafik"
-                        : id == 5                                    ? "Grafica"
-                                                                      : "Graphics";
+    const char* label = TabLabel(id);
     SetStringField(item + 0xe8, label);
     SetText(*reinterpret_cast<u64*>(item + 0xf0), label);
     std::printf("Graphics tab: labelled\n");
@@ -500,7 +507,6 @@ void UpdateRestartRow() {
 }
 
 u64 PS4_SYSV_ABI LanguageItemHook(void* self, void* event, void* a2, void* a3, void* a4, void* a5) {
-    if (code_shift == 0x10) return language_item_original(self, event, a2, a3, a4, a5);
     const u64 item = reinterpret_cast<u64>(self);
     if (event && IsA(event, InputEventMeta)) {
         const u32 type = *reinterpret_cast<u32*>(static_cast<u8*>(event) + 0x18);
@@ -610,59 +616,8 @@ u64 PS4_SYSV_ABI LoadMapHook(void* context, void* args, void* a2, void* a3, void
     return false;
 }
 
-template <typename T> bool EuRead(u64 base, u64 offset, T& value) {
-    if (base < 0x10000 || (base & 7) || base >= (1ull << 47) ||
-        offset > (1ull << 47) - base || sizeof(T) > (1ull << 47) - base - offset) return false;
-    return SafeRead(reinterpret_cast<void*>(base + offset), &value, sizeof(value));
-}
-
-bool IsEuLanguageInstance(void* object) {
-    u64 node = reinterpret_cast<u64>(object), owner = 0, project = 0, root = 0, value = 0;
-    if (!EuRead(node, 0x20, owner) || !EuRead(owner, 0x98, project) ||
-        !EuRead(owner, 0x10, root) || project < 0x4f00) return false;
-    const u64 pool = project - 0x4f00;
-    u8 end = 0;
-    if (!EuRead(pool, 0x587f, end)) return false;
-    for (const auto& [offset, relative] : {std::pair<u64,u64>{0x10,0xf0}, {0x18,0x210},
-                                          {0x38,0x430}, {0xa0,0x470}})
-        if (!EuRead(project, offset, value) || value != project + relative) return false;
-    for (u64 list : {pool, pool + 0x53d8}) {
-        u32 count = 0, capacity = 0;
-        if (!EuRead(list, 0xc, count) || count || !EuRead(list, 0x10, capacity) || capacity != 72 ||
-            !EuRead(list, 0x20, value) || value) return false;
-    }
-    struct Pair { u64 index, offset; u32 hash; };
-    constexpr Pair pairs[] = {{0,0x268,0x58158328}, {1,0x280,0xa166eff7},
-                              {2,0x298,0x0e41d344}, {38,0x1370,0xe9d89d08}};
-    for (const auto& pair : pairs) {
-        u32 hash = 0;
-        if (!EuRead(pool, 0x28 + pair.index * 8, value) || value != pool + pair.offset ||
-            !EuRead(pool, 0x5408 + pair.index * 16, hash) || hash != pair.hash) return false;
-    }
-    const u64 templates[] = {0x1370,0xaf0,0x4e0,0x4ff0};
-    u64 seen[4]{};
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < i; ++j) if (node == seen[j]) return false;
-        seen[i] = node;
-        u64 source = 0, node_owner = 0, parent = 0;
-        if (!EuRead(node, 0x18, source) || source != pool + templates[i] ||
-            !EuRead(node, 0x20, node_owner) || node_owner != owner ||
-            !EuRead(node, 0x40, parent) || (i == 3 && (node != root || parent))) return false;
-        node = parent;
-    }
-    for (int i = 0; i < 3; ++i)
-        if (!EuRead(pool, templates[i] + 0x40, value) ||
-            value != (i < 2 ? pool + templates[i+1] : 0)) return false;
-    return true;
-}
-
 u64 PS4_SYSV_ABI HideHook(void* context, void* args, void* a2, void* a3, void* a4, void* a5) {
-    auto held = Input(context, args);
-    void* object = held.get();
-    if (code_shift == 0x10) {
-        if (IsEuLanguageInstance(object)) return 0;
-        return hide_original(context, args, a2, a3, a4, a5);
-    }
+    void* object = Input(context, args);
     // OCTR v0.7.1: no Quit Game button (scripts/graphics_tab.py), so no placeable is kept shown
     // for it: its label test ("Salir", "Sair"...) also matched the game's own buttons.
     if (IsTab(object, "hide")) {
@@ -673,17 +628,13 @@ u64 PS4_SYSV_ABI HideHook(void* context, void* args, void* a2, void* a3, void* a
 }
 
 u64 PS4_SYSV_ABI ShowHook(void* context, void* args, void* a2, void* a3, void* a4, void* a5) {
-    if (code_shift == 0x10) return show_original(context, args, a2, a3, a4, a5);
-    auto held = Input(context, args);
-    IsTab(held.get(), "show");
+    IsTab(Input(context, args), "show");
     return show_original(context, args, a2, a3, a4, a5);
 }
 
 u64 PS4_SYSV_ABI Open2Hook(void* context, void* args, void* a2, void* a3, void* a4, void* a5) {
-    if (code_shift == 0x10) return open2_original(context, args, a2, a3, a4, a5);
     int where = -1;
-    auto held = Input(context, args);
-    void* object = held.get();
+    void* object = Input(context, args);
     Dump("open", args, object);
     const std::string name = Name(object, &where);
     // The tab's script (relabelled by scripts/graphics_tab.py) names a project that does not

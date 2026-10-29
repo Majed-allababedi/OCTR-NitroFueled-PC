@@ -17,6 +17,16 @@ from prepare import parse_self
 
 
 class GraphicsTabTests(unittest.TestCase):
+    def test_arabic_menu_labels_are_localized_and_fit_original_slots(self):
+        import unicodedata
+        self.assertEqual(unicodedata.normalize('NFKC', graphics_tab.LABELS['ar']), 'الرسوم')
+        label, hint = graphics_tab.QUIT_LABELS['ar']
+        self.assertEqual(unicodedata.normalize('NFKC', label), 'خروج')
+        self.assertEqual(unicodedata.normalize('NFKC', hint), 'إغلاق اللعبة والعودة إلى سطح المكتب.')
+        self.assertLessEqual(len(graphics_tab.LABELS['ar'].encode()), 34)
+        self.assertLessEqual(len(label.encode()) + 1, 16)
+        self.assertLessEqual(len(hint.encode()), 191)
+
     def test_labels_preserve_string_positions(self):
         for label in graphics_tab.LABELS.values():
             original = b'prefix\0Language selection padding\0\0' + graphics_tab.ANCHOR + b'\0Gameplay\0'
@@ -63,29 +73,13 @@ PYTHON=prepare_test
             online_name = graphics_tab.QUIT_LEVEL[0][:-1].decode()
             self.assertEqual(sum(main.string_at(s) == quit_name for s in main.sites['RSTT']), 1)
             self.assertGreaterEqual(sum(main.string_at(s) == online_name for s in main.sites['RSTT']), 1)
-            edition = graphics_tab.menu_edition(game)
             for language, label in graphics_tab.LABELS.items():
                 key = f'ui/octane_options_menu_{language}.lng'
                 if key not in files:
                     continue
                 text = Igz(files[key])
                 i = text.strings.index(graphics_tab.ANCHOR.decode())
-                if edition == 'EU':
-                    # EU retains the exact original captions, including Arabic presentation forms.
-                    for archive_name in graphics_tab.ARCHIVES:
-                        source = game / 'archives' / archive_name
-                        if not source.is_file():
-                            continue
-                        original = graphics_tab.Archive(source)
-                        with original.f:
-                            matches = [j for j in range(len(original.names)) if original.logical(j).lower() == key]
-                            if matches:
-                                self.assertEqual(files[key], original.read(matches[0]))
-                                break
-                    else:
-                        self.fail(f'original EU table missing: {key}')
-                else:
-                    self.assertEqual(text.strings[i - 1].strip(), label)
+                self.assertEqual(text.strings[i - 1].strip(), label)
                 quit_text = Igz(files[f'ui/octane_mainmenu_{language}.lng'])
                 i = quit_text.strings.index(graphics_tab.QUIT_KEY[:-1].decode())
                 self.assertEqual(quit_text.strings[i + 1].strip(), graphics_tab.QUIT_LABELS[language][0])

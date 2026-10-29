@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Regional Options and Quit menus in an extra archive, update3.pak.
+"""The game's Options menu "Graphics" tab: relabelled menu text in an extra archive, update3.pak.
 
-The port restores the game's hidden Language Select row. USA repurposes it as Graphics
-(gpu/shim/bbport_graphics_tab.cpp); EU keeps its original page, events and localized captions.
-Both editions expose the main-menu Quit control with a localized caption and description.
+The Options menu (ui/Octane_Options_Menu.igz) has a fifth tab, Language Select, that the game
+hides in this region. The port shows it again and opens its own settings menu when it is chosen
+(gpu/shim/bbport_graphics_tab.cpp); this script renames it "Graphics" in the menu's available USA/EU text
+tables (ui/Octane_Options_Menu_*.lng).
 
 The game loads archives/update.pak, update2.pak, ... until one is missing, each overriding the
 files of the ones before; the 1.21 update's own menu files are in update.pak/update2.pak. The
-newest copy of each required file is read from the player's own archives and written
-alongside the adjusted menus to a small update3.pak (uncompressed, the archives' own format)
-that the game loads last.
+newest copy of each text table is read from the player's own archives, relabelled, and written
+to a small update3.pak (uncompressed, the archives' own format) that the game loads last.
 
 Diagnostics: the Options menu files of every archive searched are copied to
 OUT/graphics-tab/dump/<archive>/ (a few hundred kilobytes).
@@ -34,11 +34,11 @@ OUTPUT = 'archives/update3.pak'
 # The tab's label is the string before this placeable name in each text table.
 ANCHOR = b'Comp__Menu_ButtonWithIcon005_behaviors_0'
 LABELS = {'en': 'Graphics', 'fr': 'Graphismes', 'mx': 'Gráficos', 'pt': 'Gráficos',
-          'es': 'Gráficos', 'de': 'Grafik', 'it': 'Grafica', 'ar': 'Graphics'}
+          'es': 'Gráficos', 'de': 'Grafik', 'it': 'Grafica', 'ar': 'ﺍﻟﺮﺳﻮﻡ'}
 DUMP = ('octane_options_menu', 'octane_options_languageselect', 'octane_mainmenu', 'octane_main_menu',
         'octane_startscreen_menu')
 SECTOR = 0x800
-VERSION = 20  # of this script's output (the cached file is rebuilt when it changes)
+VERSION = 21  # of this script's output (the cached file is rebuilt when it changes)
 
 
 def fnv1a(text):
@@ -223,7 +223,7 @@ QUIT_LABELS = {'en': ('Quit Game', 'Close the game and return to the desktop.'),
                'es': ('Salir', 'Cerrar el juego y volver al escritorio.'),
                'de': ('Beenden', 'Spiel beenden und zum Desktop zurückkehren.'),
                'it': ('Esci', 'Chiudi il gioco e torna al desktop.'),
-               # Like the original Arabic tables: presentation forms in logical order (خروج).
+               # Arabic presentation forms in logical order, as in the original tables.
                'ar': ('ﺧﺮﻭﺝ', 'ﺇﻏﻼﻕ ﺍﻟﻠﻌﺒﺔ ﻭﺍﻟﻌﻮﺩﺓ ﺇﻟﻰ ﺳﻄﺢ ﺍﻟﻤﻜﺘﺐ.')}
 QUIT_LEVEL = (b'Octane/Octane_OnlineLobby/Octane_OnlineLobby\0',
               b'Octane/Octane_BbportQuit0/Octane_BbportQuit0\0')
@@ -360,31 +360,7 @@ OPTIONAL['vsc/ui/octane_mainmenu/octane_mainmenu_root.igz'] = rename(
     b'Comp__Menu_ButtonWithIcon', b'Comp__Menu_ButtonWithIcoX')
 
 
-EU_LOCALES = ('ar', 'de', 'en', 'es', 'fr', 'it')
-# Keep the native Language control and captions; only USA repurposes its page as Graphics.
-EU_CHANGES = {f'ui/octane_options_menu_{lang}.lng': (lambda data: data) for lang in EU_LOCALES}
-EU_CHANGES['ui/octane_options_menu.igz'] = show_tab
-EU_CHANGES['vsc/ui/octane_options_menu/octane_options_menu_root.igz'] = CHANGES[
-    'vsc/ui/octane_options_menu/octane_options_menu_root.igz']
-
-
-def menu_edition(game):
-    from prepare import sfo
-    info = sfo((game / 'sce_sys/param.sfo').read_bytes())
-    title = info.get('TITLE_ID')
-    if info.get('APP_VER') != '01.21' or title not in ('CUSA13795', 'CUSA14876'):
-        raise ValueError('menus require USA or EU 1.21')
-    return 'EU' if title == 'CUSA14876' else 'USA'
-
-
-def build(game, dest, dump, *, edition=None):
-    edition = edition or menu_edition(game)
-    if edition not in ('USA', 'EU'):
-        raise ValueError('unsupported menu edition')
-    eu = edition == 'EU'
-    changes = EU_CHANGES if eu else CHANGES
-    if eu and any(path.resolve().is_relative_to(game.resolve()) for path in (dest, dump)):
-        raise ValueError('menu outputs must be outside the original EU game')
+def build(game, dest, dump):
     with ExitStack() as stack:
         found = {}  # logical name (lower case) -> (archive, index, archive name)
         archives = []
@@ -402,26 +378,24 @@ def build(game, dest, dump, *, edition=None):
                     target = dump / name / logical
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(archive.read(i))
-                if (low in changes or low in OPTIONAL) and low not in found:
+                if (low in CHANGES or low in OPTIONAL) and low not in found:
                     found[low] = (archive, i, name)
         # Each edition ships a different language set; the graph/scripts and English are required.
-        required = set(changes) if eu else {name for name in changes if not name.endswith('.lng')}
+        required = {name for name in CHANGES if not name.endswith('.lng')}
         required.add('ui/octane_options_menu_en.lng')
         if not required <= set(found):
             missing = ', '.join(sorted(required - set(found)))
             raise ValueError(f'not found: {missing}')
-        # Require all EU Quit locales before transforming any assets.
+        files = []
+        for low in sorted(set(CHANGES) & set(found)):
+            archive, i, name = found[low]
+            full, logical = archive.names[i]
+            files.append((full, logical, archive.infos[i][1] & ~0xFF, CHANGES[low](archive.read(i))))
+            print(f'Graphics tab: {logical} from {name}')
+        # Quit is all-or-nothing for the languages present in this edition, after the Graphics files.
         quit_required = {name for name in OPTIONAL if not name.endswith('.lng')}
         quit_required.update(f'ui/octane_mainmenu_{lang}.lng' for lang in LABELS
                              if f'ui/octane_options_menu_{lang}.lng' in found)
-        if eu and not quit_required <= set(found):
-            raise ValueError('EU Quit resources missing: ' + ', '.join(sorted(quit_required - set(found))))
-        files = []
-        for low in sorted(set(changes) & set(found)):
-            archive, i, name = found[low]
-            full, logical = archive.names[i]
-            files.append((full, logical, archive.infos[i][1] & ~0xFF, changes[low](archive.read(i))))
-            print(f'Graphics tab: {logical} from {name}')
         if quit_required <= set(found):
             try:
                 quit_files = []
@@ -433,8 +407,6 @@ def build(game, dest, dump, *, edition=None):
                 files += quit_files
                 print('Graphics tab: Quit Game button in the main menu')
             except (ValueError, KeyError, IndexError, struct.error, ImportError) as error:
-                if eu:
-                    raise ValueError(f'EU Quit overlay incomplete: {error}') from error
                 print(f'Graphics tab: no Quit Game button ({type(error).__name__}: {error})')
         dest.parent.mkdir(parents=True, exist_ok=True)
         write_archive(dest, files, archives[0])
@@ -464,17 +436,16 @@ def main():
     stamp = '-'.join(f'{(args.game / "archives" / a).stat().st_size}'
                      for a in ARCHIVES if (args.game / 'archives' / a).is_file())
     folder = args.out / 'graphics-tab'
+    dest = folder / f'update3-v{VERSION}-{stamp}.pak'
     try:
-        edition = menu_edition(args.game)
-        dest = folder / f'update3-v{VERSION}-{edition}-{stamp}.pak'
         if not dest.is_file():
             for old in folder.glob('*.pak'):
                 old.unlink()
-            build(args.game, dest, folder / 'dump', edition=edition)
+            build(args.game, dest, folder / 'dump')
     except (OSError, ValueError, lzma.LZMAError, zlib.error) as error:
         print(f'Graphics tab: {error}, off')
         return
-    print(f'Menus: {edition} Language/Quit' if edition == 'EU' else f'Graphics tab: Options menu tab relabelled ({dest.name})')
+    print(f'Graphics tab: Options menu tab relabelled ({dest.name})')
     print(f'{OUTPUT}={dest}')
 
 
